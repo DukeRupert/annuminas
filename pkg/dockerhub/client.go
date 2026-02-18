@@ -37,16 +37,16 @@ func (c *Client) authenticate() error {
 	}
 
 	payload := struct {
-		Identifier string `json:"identifier"`
-		Secret     string `json:"secret"`
-	}{Identifier: c.Username, Secret: c.Token}
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}{Username: c.Username, Password: c.Token}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode auth request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/v2/auth/token", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/v2/users/login", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build auth request: %w", err)
 	}
