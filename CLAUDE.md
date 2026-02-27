@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Language:** Go
 - **CLI framework:** Cobra (`github.com/spf13/cobra`)
 - **Env loading:** `github.com/joho/godotenv`
-- **Config:** Credentials from `~/.dotfiles/.env` with fallback to `.env`; requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+- **Config:** Credentials from `~/.dotfiles/.env` with fallback to `.env`; requires `DOCKERHUB_USERNAME` and `DOCKERHUB_PASSWORD`
 
 ## Build & Development Commands
 
@@ -31,6 +31,7 @@ main.go              # Entry point, calls cmd.Execute()
 cmd/
   root.go            # Env loading, cobra setup, client init
   repo.go            # repo list, repo get, repo create, repo delete, repo ensure
+  token.go           # token create, token list, token delete (PAT management)
   ping.go            # Credential verification via POST /v2/auth/token
 pkg/
   dockerhub/
@@ -47,5 +48,6 @@ pkg/
 - `EnsureRepo` is the primary command for `arnor` integration — must be idempotent (HEAD to check existence, create only on 404).
 - List endpoints are paginated (`count`, `next`, `previous`, `results`) — `ListRepos` must handle pagination.
 - Namespace defaults to `DOCKERHUB_USERNAME` but can be an organization name.
-- Error responses return JSON with a `message` field — parse and surface these.
+- Error responses return JSON with a `message` or `detail` field — parse and surface these.
+- Password auth (not PAT) is required for write operations (repo create, token management). PAT-issued JWTs are restricted by Docker Hub.
 - Mirror structure and conventions of sibling project `fornost`: same `doRequest`/`get`/`post`/`delete` HTTP helper pattern, same godotenv loading, same Cobra command structure.

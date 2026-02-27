@@ -42,11 +42,11 @@ func initClient() error {
 		return fmt.Errorf("DOCKERHUB_USERNAME must be set in ~/.dotfiles/.env or .env")
 	}
 
-	token := os.Getenv("DOCKERHUB_TOKEN")
-	if token == "" {
-		return fmt.Errorf("DOCKERHUB_TOKEN must be set in ~/.dotfiles/.env or .env")
+	password := os.Getenv("DOCKERHUB_PASSWORD")
+	if password == "" {
+		return fmt.Errorf("DOCKERHUB_PASSWORD must be set in ~/.dotfiles/.env or .env")
 	}
 
-	client = dockerhub.NewClient(username, token)
+	client = dockerhub.NewClient(username, password)
 	return nil
 }

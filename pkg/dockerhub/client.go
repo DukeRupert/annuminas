@@ -12,47 +12,47 @@ const baseURL = "https://hub.docker.com"
 
 // Client wraps the Docker Hub API v2.
 type Client struct {
-	Username   string
-	Token      string
-	jwt        string
-	httpClient *http.Client
+	Username string
+	Password string
+	jwt      string
+	http     *http.Client
 }
 
 // NewClient returns a Client authenticated with the given credentials.
 // It does NOT authenticate immediately — authentication is lazy on first API call.
-func NewClient(username, token string) *Client {
+func NewClient(username, password string) *Client {
 	return &Client{
-		Username:   username,
-		Token:      token,
-		httpClient: &http.Client{},
+		Username: username,
+		Password: password,
+		http:     &http.Client{},
 	}
 }
 
 // --- Authentication ---
 
-// authenticate obtains a JWT from Docker Hub using the two-step auth flow.
+// authenticate obtains a JWT from Docker Hub via POST /v2/auth/token.
 func (c *Client) authenticate() error {
 	if c.jwt != "" {
 		return nil
 	}
 
 	payload := struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}{Username: c.Username, Password: c.Token}
+		Identifier string `json:"identifier"`
+		Secret     string `json:"secret"`
+	}{Identifier: c.Username, Secret: c.Password}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode auth request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/v2/users/login", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/v2/auth/token", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build auth request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("auth request: %w", err)
 	}
@@ -65,20 +65,20 @@ func (c *Client) authenticate() error {
 
 	if resp.StatusCode >= 400 {
 		var apiErr errorResponse
-		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Message != "" {
-			return fmt.Errorf("authentication failed: %s", apiErr.Message)
+		if json.Unmarshal(raw, &apiErr) == nil && apiErr.text() != "" {
+			return fmt.Errorf("authentication failed: %s", apiErr.text())
 		}
 		return fmt.Errorf("authentication failed: status %d", resp.StatusCode)
 	}
 
 	var authResp struct {
-		Token string `json:"token"`
+		AccessToken string `json:"access_token"`
 	}
 	if err := json.Unmarshal(raw, &authResp); err != nil {
 		return fmt.Errorf("decode auth response: %w", err)
 	}
 
-	c.jwt = authResp.Token
+	c.jwt = authResp.AccessToken
 	return nil
 }
 
@@ -98,7 +98,7 @@ func (c *Client) doRequest(method, endpoint string, body io.Reader, out any) (in
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("http request: %w", err)
 	}
@@ -111,8 +111,8 @@ func (c *Client) doRequest(method, endpoint string, body io.Reader, out any) (in
 
 	if resp.StatusCode >= 400 {
 		var apiErr errorResponse
-		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Message != "" {
-			return resp.StatusCode, fmt.Errorf("docker hub api error: %s", apiErr.Message)
+		if json.Unmarshal(raw, &apiErr) == nil && apiErr.text() != "" {
+			return resp.StatusCode, fmt.Errorf("docker hub api error: %s", apiErr.text())
 		}
 		return resp.StatusCode, fmt.Errorf("docker hub api error: status %d", resp.StatusCode)
 	}
@@ -155,11 +155,17 @@ func (c *Client) head(endpoint string) (int, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.jwt)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Surface auth/server errors so callers don't misinterpret 401 as "not found".
+	// 404 is allowed through — RepoExists relies on it to mean "doesn't exist".
+	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
+		return resp.StatusCode, fmt.Errorf("docker hub api error: status %d", resp.StatusCode)
+	}
 
 	return resp.StatusCode, nil
 }
@@ -198,6 +204,14 @@ func getAll[T any](c *Client, endpoint string) ([]T, error) {
 
 type errorResponse struct {
 	Message string `json:"message"`
+	Detail  string `json:"detail"`
+}
+
+func (e errorResponse) text() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Detail
 }
 
 // Repository represents a Docker Hub repository.
@@ -210,6 +224,19 @@ type Repository struct {
 	PullCount      int    `json:"pull_count"`
 	LastUpdated    string `json:"last_updated"`
 	DateRegistered string `json:"date_registered"`
+}
+
+// AccessToken represents a Docker Hub personal access token.
+type AccessToken struct {
+	UUID        string   `json:"uuid"`
+	TokenLabel  string   `json:"token_label"`
+	Scopes      []string `json:"scopes"`
+	IsActive    bool     `json:"is_active"`
+	Token       string   `json:"token"`
+	CreatedAt   string   `json:"created_at"`
+	LastUsed    string   `json:"last_used"`
+	GeneratedBy string   `json:"generated_by"`
+	CreatorIP   string   `json:"creator_ip"`
 }
 
 // --- API methods ---
@@ -283,4 +310,33 @@ func (c *Client) EnsureRepo(namespace, name string) error {
 // DeleteRepo deletes a repository by name.
 func (c *Client) DeleteRepo(namespace, name string) error {
 	return c.delete(fmt.Sprintf("/v2/namespaces/%s/repositories/%s", namespace, name))
+}
+
+// CreateAccessToken creates a personal access token with the given label and scopes.
+// Valid scopes: "repo:admin", "repo:write", "repo:read", "repo:public_read".
+// The token value is only available in the response from creation — it cannot be retrieved later.
+func (c *Client) CreateAccessToken(label string, scopes []string) (*AccessToken, error) {
+	payload := struct {
+		TokenLabel string   `json:"token_label"`
+		Scopes     []string `json:"scopes"`
+	}{
+		TokenLabel: label,
+		Scopes:     scopes,
+	}
+
+	var token AccessToken
+	if err := c.post("/v2/access-tokens", payload, &token); err != nil {
+		return nil, err
+	}
+	return &token, nil
+}
+
+// ListAccessTokens returns all personal access tokens for the authenticated user.
+func (c *Client) ListAccessTokens() ([]AccessToken, error) {
+	return getAll[AccessToken](c, "/v2/access-tokens")
+}
+
+// DeleteAccessToken deletes a personal access token by UUID.
+func (c *Client) DeleteAccessToken(uuid string) error {
+	return c.delete(fmt.Sprintf("/v2/access-tokens/%s", uuid))
 }
