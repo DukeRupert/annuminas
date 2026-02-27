@@ -112,9 +112,11 @@ func (c *Client) doRequest(method, endpoint string, body io.Reader, out any) (in
 	if resp.StatusCode >= 400 {
 		var apiErr errorResponse
 		if json.Unmarshal(raw, &apiErr) == nil && apiErr.text() != "" {
-			return resp.StatusCode, fmt.Errorf("docker hub api error: %s", apiErr.text())
+			return resp.StatusCode, fmt.Errorf("docker hub api error (%s %s, status %d): %s\nresponse body: %s",
+				method, endpoint, resp.StatusCode, apiErr.text(), string(raw))
 		}
-		return resp.StatusCode, fmt.Errorf("docker hub api error: status %d", resp.StatusCode)
+		return resp.StatusCode, fmt.Errorf("docker hub api error (%s %s, status %d)\nresponse body: %s",
+			method, endpoint, resp.StatusCode, string(raw))
 	}
 
 	if out != nil && len(raw) > 0 {
